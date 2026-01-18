@@ -6,7 +6,6 @@ import { MongoClient, ServerApiVersion } from "mongodb";
 const clientCache = new Map(); // key: mongodbUri, value: Promise<MongoClient>
 const MAX_CACHED_CLIENTS = 50;
 
-
 function getClientForUri(mongodbUri) {
   if (!mongodbUri || typeof mongodbUri !== "string") {
     throw new Error("Missing mongodbUri");
@@ -21,7 +20,7 @@ function getClientForUri(mongodbUri) {
   }
 
   if (!clientCache.has(mongodbUri)) {
-        if (clientCache.size >= MAX_CACHED_CLIENTS) {
+    if (clientCache.size >= MAX_CACHED_CLIENTS) {
       // delete oldest inserted item (Map keeps insertion order)
       const oldestKey = clientCache.keys().next().value;
       clientCache.delete(oldestKey);
@@ -88,8 +87,16 @@ app.post("/mongo/findOne", async (req, res) => {
 
     return res.json({ doc });
   } catch (err) {
-    console.error(err?.message || err); // IMPORTANT: do not log req.body
-    return res.status(500).json({ error: "Server error" });
+    const code = err?.code;
+    const name = err?.name;
+    const message = err?.message;
+
+    // Example: duplicate key error (E11000) is very common in exercises
+    if (code === 11000) {
+      return res.status(409).json({ error: "Duplicate key", code, message });
+    }
+
+    return res.status(500).json({ error: "Server error", code, name, message });
   }
 });
 
@@ -114,15 +121,25 @@ app.post("/mongo/insertOne", async (req, res) => {
       acknowledged: result.acknowledged,
     });
   } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Server error" });
+    const code = err?.code;
+    const name = err?.name;
+    const message = err?.message;
+
+    // Example: duplicate key error (E11000) is very common in exercises
+    if (code === 11000) {
+      return res.status(409).json({ error: "Duplicate key", code, message });
+    }
+
+    return res.status(500).json({ error: "Server error", code, name, message });
   }
 });
 
 app.post("/mongo/updateOne", async (req, res) => {
   try {
-    const { mongodbUri, db, collection, filter, update, options } = req.body || {};
-    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    const { mongodbUri, db, collection, filter, update, options } =
+      req.body || {};
+    if (!mongodbUri)
+      return res.status(400).json({ error: "Missing mongodbUri" });
     if (!db || !collection || !filter || !update) {
       return res
         .status(400)
@@ -142,15 +159,24 @@ app.post("/mongo/updateOne", async (req, res) => {
       upsertedId: result.upsertedId ?? null,
     });
   } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Server error" });
+    const code = err?.code;
+    const name = err?.name;
+    const message = err?.message;
+
+    // Example: duplicate key error (E11000) is very common in exercises
+    if (code === 11000) {
+      return res.status(409).json({ error: "Duplicate key", code, message });
+    }
+
+    return res.status(500).json({ error: "Server error", code, name, message });
   }
 });
 
 app.post("/mongo/deleteOne", async (req, res) => {
   try {
     const { mongodbUri, db, collection, filter } = req.body || {};
-    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!mongodbUri)
+      return res.status(400).json({ error: "Missing mongodbUri" });
     if (!db || !collection || !filter) {
       return res
         .status(400)
@@ -165,15 +191,24 @@ app.post("/mongo/deleteOne", async (req, res) => {
       deletedCount: result.deletedCount,
     });
   } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Server error" });
+    const code = err?.code;
+    const name = err?.name;
+    const message = err?.message;
+
+    // Example: duplicate key error (E11000) is very common in exercises
+    if (code === 11000) {
+      return res.status(409).json({ error: "Duplicate key", code, message });
+    }
+
+    return res.status(500).json({ error: "Server error", code, name, message });
   }
 });
 
 app.post("/mongo/find", async (req, res) => {
   try {
     const { mongodbUri, db, collection, filter, options } = req.body || {};
-    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!mongodbUri)
+      return res.status(400).json({ error: "Missing mongodbUri" });
     if (!db || !collection) {
       return res.status(400).json({ error: "Missing db or collection" });
     }
@@ -192,15 +227,25 @@ app.post("/mongo/find", async (req, res) => {
     const docs = await cursor.toArray();
     return res.json({ docs });
   } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Server error" });
+    const code = err?.code;
+    const name = err?.name;
+    const message = err?.message;
+
+    // Example: duplicate key error (E11000) is very common in exercises
+    if (code === 11000) {
+      return res.status(409).json({ error: "Duplicate key", code, message });
+    }
+
+    return res.status(500).json({ error: "Server error", code, name, message });
   }
 });
 
 app.post("/mongo/findOneAndUpdate", async (req, res) => {
   try {
-    const { mongodbUri, db, collection, filter, update, options } = req.body || {};
-    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    const { mongodbUri, db, collection, filter, update, options } =
+      req.body || {};
+    if (!mongodbUri)
+      return res.status(400).json({ error: "Missing mongodbUri" });
     if (!db || !collection || !filter || !update) {
       return res
         .status(400)
@@ -217,7 +262,7 @@ app.post("/mongo/findOneAndUpdate", async (req, res) => {
     if (normalized.returnDocument === "after")
       normalized.returnOriginal = false;
 
-  const c = await getClientForUri(mongodbUri);
+    const c = await getClientForUri(mongodbUri);
     const result = await c
       .db(db)
       .collection(collection)
@@ -225,8 +270,16 @@ app.post("/mongo/findOneAndUpdate", async (req, res) => {
 
     return res.json({ value: result.value ?? null });
   } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Server error" });
+    const code = err?.code;
+    const name = err?.name;
+    const message = err?.message;
+
+    // Example: duplicate key error (E11000) is very common in exercises
+    if (code === 11000) {
+      return res.status(409).json({ error: "Duplicate key", code, message });
+    }
+
+    return res.status(500).json({ error: "Server error", code, name, message });
   }
 });
 
