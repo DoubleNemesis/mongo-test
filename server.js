@@ -1,7 +1,47 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
 import { MongoClient, ServerApiVersion } from "mongodb";
+
+const clientCache = new Map(); // key: mongodbUri, value: Promise<MongoClient>
+const MAX_CACHED_CLIENTS = 50;
+
+
+function getClientForUri(mongodbUri) {
+  if (!mongodbUri || typeof mongodbUri !== "string") {
+    throw new Error("Missing mongodbUri");
+  }
+
+  // Minimal sanity check; avoid logging the URI anywhere.
+  if (
+    !mongodbUri.startsWith("mongodb+srv://") &&
+    !mongodbUri.startsWith("mongodb://")
+  ) {
+    throw new Error("mongodbUri must start with mongodb+srv:// or mongodb://");
+  }
+
+  if (!clientCache.has(mongodbUri)) {
+        if (clientCache.size >= MAX_CACHED_CLIENTS) {
+      // delete oldest inserted item (Map keeps insertion order)
+      const oldestKey = clientCache.keys().next().value;
+      clientCache.delete(oldestKey);
+    }
+    const client = new MongoClient(mongodbUri, {
+      serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+      },
+    });
+    clientCache.set(
+      mongodbUri,
+      client.connect().then(() => client),
+    );
+  }
+
+  return clientCache.get(mongodbUri);
+}
+// until here
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,10 +53,14 @@ const { MONGODB_URI } = process.env;
 if (!MONGODB_URI) {
   throw new Error("Missing MONGODB_URI env var");
 }
- 
+
 // Reuse the client across requests (important on serverless / small instances)
 const client = new MongoClient(MONGODB_URI, {
-  serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
 });
 
 let clientPromise;
@@ -30,22 +74,161 @@ app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.get("/singleton", async (_req, res) => {
+app.post("/mongo/findOne", async (req, res) => {
   try {
-    const c = await getClient();
-    const doc = await c
-      .db("poc")
-      .collection("singleton")
-      .findOne({ _id: "singleton" });
+    const { mongodbUri, db, collection, filter } = req.body || {};
+    if (!mongodbUri || !db || !collection || !filter) {
+      return res
+        .status(400)
+        .json({ error: "Missing mongodbUri, db, collection, or filter" });
+    }
 
-    if (!doc) return res.status(404).json({ error: "Not found" });
-    return res.json(doc);
+    const c = await getClientForUri(mongodbUri);
+    const doc = await c.db(db).collection(collection).findOne(filter);
+
+    return res.json({ doc });
   } catch (err) {
-    console.error(err);
+    console.error(err?.message || err); // IMPORTANT: do not log req.body
     return res.status(500).json({ error: "Server error" });
   }
 });
 
+app.post("/mongo/insertOne", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, document } = req.body || {};
+    if (!mongodbUri) {
+      return res.status(400).json({ error: "Missing mongodbUri" });
+    }
+    if (!db || !collection || !document) {
+      return res
+        .status(400)
+        .json({ error: "Missing db, collection, or document" });
+    }
+
+    const c = await getClientForUri(mongodbUri);
+
+    const result = await c.db(db).collection(collection).insertOne(document);
+
+    return res.json({
+      insertedId: result.insertedId,
+      acknowledged: result.acknowledged,
+    });
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/mongo/updateOne", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, filter, update, options } = req.body || {};
+    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!db || !collection || !filter || !update) {
+      return res
+        .status(400)
+        .json({ error: "Missing db, collection, filter, or update" });
+    }
+
+    const c = await getClientForUri(mongodbUri);
+    const result = await c
+      .db(db)
+      .collection(collection)
+      .updateOne(filter, update, options || undefined);
+
+    return res.json({
+      acknowledged: result.acknowledged,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+      upsertedId: result.upsertedId ?? null,
+    });
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/mongo/deleteOne", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, filter } = req.body || {};
+    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!db || !collection || !filter) {
+      return res
+        .status(400)
+        .json({ error: "Missing db, collection, or filter" });
+    }
+
+    const c = await getClientForUri(mongodbUri);
+    const result = await c.db(db).collection(collection).deleteOne(filter);
+
+    return res.json({
+      acknowledged: result.acknowledged,
+      deletedCount: result.deletedCount,
+    });
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/mongo/find", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, filter, options } = req.body || {};
+    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!db || !collection) {
+      return res.status(400).json({ error: "Missing db or collection" });
+    }
+
+    const c = await getClientForUri(mongodbUri);
+    const cursor = c
+      .db(db)
+      .collection(collection)
+      .find(filter || {}, options || undefined);
+
+    // Apply cursor modifiers passed in options (keep it minimal)
+    if (options?.sort) cursor.sort(options.sort);
+    if (options?.limit) cursor.limit(options.limit);
+    if (options?.project) cursor.project(options.project);
+
+    const docs = await cursor.toArray();
+    return res.json({ docs });
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/mongo/findOneAndUpdate", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, filter, update, options } = req.body || {};
+    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!db || !collection || !filter || !update) {
+      return res
+        .status(400)
+        .json({ error: "Missing db, collection, filter, or update" });
+    }
+
+    const normalized = { ...(options || {}) };
+
+    // Ensure we ALWAYS get a ModifyResult back with a `.value` field
+    normalized.includeResultMetadata = true;
+
+    // For newer option style, keep returnDocument; (no need to translate if driver supports it)
+    // If you want maximum backward compatibility you can also translate:
+    if (normalized.returnDocument === "after")
+      normalized.returnOriginal = false;
+
+  const c = await getClientForUri(mongodbUri);
+    const result = await c
+      .db(db)
+      .collection(collection)
+      .findOneAndUpdate(filter, update, normalized);
+
+    return res.json({ value: result.value ?? null });
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
