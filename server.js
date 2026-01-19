@@ -304,6 +304,27 @@ app.post("/mongo/insertMany", async (req, res) => {
   }
 });
 
+app.post("/mongo/deleteMany", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, filter, options } = req.body || {};
+
+    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!db || !collection || !filter) {
+      return res.status(400).json({ error: "Missing db, collection, or filter" });
+    }
+
+    const c = await getClientForUri(mongodbUri);
+    const result = await c.db(db).collection(collection).deleteMany(filter, options);
+
+    return res.json({
+      acknowledged: result.acknowledged,
+      deletedCount: result.deletedCount,
+    });
+  } catch (err) {
+    console.error(err?.message || err);
+    return res.status(500).json({ error: "Server error", message: err?.message });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
