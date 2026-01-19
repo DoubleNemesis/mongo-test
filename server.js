@@ -283,6 +283,28 @@ app.post("/mongo/findOneAndUpdate", async (req, res) => {
   }
 });
 
+app.post("/mongo/insertMany", async (req, res) => {
+  try {
+    const { mongodbUri, db, collection, documents, options } = req.body || {};
+    if (!mongodbUri) return res.status(400).json({ error: "Missing mongodbUri" });
+    if (!db || !collection || !Array.isArray(documents)) {
+      return res.status(400).json({ error: "Missing db, collection, or documents[]" });
+    }
+
+    const c = await getClientForUri(mongodbUri);
+    const result = await c.db(db).collection(collection).insertMany(documents, options);
+
+    return res.json({
+      acknowledged: result.acknowledged,
+      insertedCount: result.insertedCount,
+      insertedIds: result.insertedIds,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Server error", message: err?.message });
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
